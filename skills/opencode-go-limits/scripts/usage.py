@@ -4,6 +4,12 @@
 Go limits are monthly dollar allowances per model. Local messages store tokens
 (not allowance), so cost is estimated from the published Go price table.
 
+Privacy: the database is opened read-only (`mode=ro` + `PRAGMA query_only`),
+nothing is ever written, nothing leaves the machine (no network code at all),
+and only numeric counters are used — message text, tool output and prompts are
+never printed, stored or summarised. The only non-numeric values that reach the
+output are model IDs.
+
 Usage: python usage.py [--plan go|go-plus|go-teams] [--provider opencode-go]
                        [--json] [--model ID] [--db PATH] [--warn]
 """
@@ -20,7 +26,18 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL = os.path.dirname(HERE)
 LIMITS_PATH = os.path.join(SKILL, "references", "limits.json")
-DEFAULT_DB = os.path.join(os.path.expanduser("~"), ".local", "share", "opencode", "opencode.db")
+
+
+def default_db() -> str:
+    """OPENCODE_DB wins; otherwise the XDG data dir, then ~/.local/share."""
+    env = os.environ.get("OPENCODE_DB")
+    if env:
+        return env
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(data_home, "opencode", "opencode.db")
+
+
+DEFAULT_DB = default_db()
 
 
 def load_limits(path: str) -> dict:
@@ -65,7 +82,8 @@ def main() -> int:
     ap.add_argument("--plan", default=None, help="go | go-plus | go-teams (default: go)")
     ap.add_argument("--provider", default="opencode-go")
     ap.add_argument("--model", default=None)
-    ap.add_argument("--db", default=DEFAULT_DB)
+    ap.add_argument("--db", default=DEFAULT_DB,
+                    help="path to opencode.db (default: $OPENCODE_DB, else ~/.local/share/opencode/opencode.db)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--warn", action="store_true", help="exit 2 when any window is >=80%")
     args = ap.parse_args()
@@ -100,6 +118,7 @@ def main() -> int:
     earliest = min(month_start, week_start, five_start)
 
     con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    con.execute("PRAGMA query_only = ON")  # belt and braces: this script must never write
     cur = con.cursor()
     rows = cur.execute(
         "SELECT time_created, data FROM session_message "
